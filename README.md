@@ -8,6 +8,8 @@ A decision-science analysis of Netflix's catalog (7,789 titles, 2008–2021), bu
 
 **Project type:** Data Analysis Internship deliverable — Vodafone Idea Foundation (VOIS) × Edunet Foundation.
 
+**🚀 [Live interactive dashboard](#) — filter the catalog, explore clustering live, and get a real-time prediction from the trained classifier.** *(replace `#` with your Streamlit Community Cloud URL once deployed — see [Deploying the Dashboard](#deploying-the-dashboard) below)*
+
 ---
 
 ## Business Context
@@ -73,6 +75,7 @@ vois-netflix-content-analytics/
 ├── notebooks/
 │   └── Netflix_Analysis.ipynb     # Full analysis, executed end-to-end
 ├── images/                        # Charts exported from the notebook
+├── app.py                         # Interactive Streamlit dashboard
 ├── requirements.txt
 ├── LICENSE
 └── README.md
@@ -90,6 +93,26 @@ jupyter notebook notebooks/Netflix_Analysis.ipynb
 ```
 
 The notebook reads `../data/Netflix_Dataset.csv` and reproduces every number and chart in this README from scratch — no hidden state, no hardcoded results.
+
+### Running the Dashboard Locally
+
+```bash
+streamlit run app.py
+```
+
+Opens at `http://localhost:8501`. The dashboard shares the exact same feature engineering and hypothesis tests as the notebook (same `data/Netflix_Dataset.csv`), plus:
+- Live filters on genres and countries
+- An interactive K-Means explorer (pick k, pick axes, watch clusters and silhouette score update)
+- A **"Predict a Title"** tab — enter hypothetical metadata and get a live prediction + probability breakdown from the trained Random Forest classifier
+- An adjustable-horizon growth forecast
+
+### Deploying the Dashboard
+
+This repo is ready to deploy for free on [Streamlit Community Cloud](https://streamlit.io/cloud):
+1. Sign in at share.streamlit.io with your GitHub account.
+2. Click **"New app"**, select this repo, branch `main`, main file path `app.py`.
+3. Deploy — it will auto-install from `requirements.txt`.
+4. Copy the resulting URL into the "Live interactive dashboard" link at the top of this README.
 
 ## Notebook Structure
 
@@ -116,6 +139,7 @@ The notebook reads `../data/Netflix_Dataset.csv` and reproduces every number and
 - **Time-series validation**: forecast honesty via genuine held-out years and MAPE, not training-fit error
 - **Feature engineering**: parsing mixed-unit fields, multi-label genre/country handling, business-rule-based audience segmentation
 - **Business translation**: every statistical result mapped to a specific, quantified recommendation
+- **Application development**: a deployable interactive dashboard (Streamlit + Plotly) exposing the same analysis with live filtering and real-time model inference — not just a static notebook
 
 ## Data
 
