@@ -10,18 +10,21 @@ import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+import shap
 import streamlit as st
 from scipy import stats
 from sklearn.cluster import KMeans
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.linear_model import LinearRegression
+from sklearn.linear_model import LinearRegression, LogisticRegression
 from sklearn.metrics import (
     accuracy_score,
+    classification_report,
     f1_score,
     mean_absolute_percentage_error,
     silhouette_score,
 )
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import StratifiedKFold, cross_val_score, train_test_split
+from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import MultiLabelBinarizer, StandardScaler
 
 RANDOM_STATE = 42
@@ -98,13 +101,28 @@ def train_classifier(_df: pd.DataFrame):
     preds = clf.predict(X_test)
     acc = accuracy_score(y_test, preds)
     f1 = f1_score(y_test, preds, average="macro")
+    report = classification_report(y_test, preds, output_dict=True)
 
     importances = pd.Series(clf.feature_importances_, index=X.columns).sort_values(ascending=False)
+    explainer = shap.TreeExplainer(clf)
+
+    # 5-fold CV comparison: Random Forest vs a Logistic Regression baseline
+    cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=RANDOM_STATE)
+    log_reg = make_pipeline(
+        StandardScaler(), LogisticRegression(max_iter=1000, class_weight="balanced", random_state=RANDOM_STATE)
+    )
+    rf_for_cv = RandomForestClassifier(
+        n_estimators=300, max_depth=10, random_state=RANDOM_STATE, class_weight="balanced"
+    )
+    log_reg_cv = cross_val_score(log_reg, X, y, cv=cv, scoring="accuracy")
+    rf_cv = cross_val_score(rf_for_cv, X, y, cv=cv, scoring="accuracy")
+
     return {
         "clf": clf, "columns": X.columns, "top_genres": top_genres,
         "categories": sorted(model_df["Category"].unique().tolist()),
         "baseline_acc": baseline_acc, "baseline_label": baseline_label,
-        "acc": acc, "f1": f1, "importances": importances,
+        "acc": acc, "f1": f1, "importances": importances, "report": report,
+        "explainer": explainer, "log_reg_cv": log_reg_cv, "rf_cv": rf_cv,
     }
 
 
@@ -128,7 +146,8 @@ c4.metric("Years covered", f"{int(df['year_added'].min())}–{int(df['year_added
 
 tabs = st.tabs([
     "Hypothesis Summary", "Content Mix", "Genre Growth", "Country Sourcing",
-    "Audience Segments", "Clustering", "Predict a Title", "Growth Forecast",
+    "Audience Segments", "Clustering", "Predict a Title", "Model Comparison",
+    "Growth Forecast", "Data Explorer",
 ])
 
 # ---- Tab: Hypothesis Summary --------------------------------------------
@@ -330,14 +349,66 @@ with tabs[6]:
         fig.update_layout(yaxis=dict(autorange="reversed"))
         st.plotly_chart(fig, width='stretch')
 
+        st.markdown(f"**Why '{pred}'?** — per-feature SHAP contribution for this specific title")
+        class_idx = list(model["clf"].classes_).index(pred)
+        shap_exp = model["explainer"](row)
+        contrib = pd.Series(shap_exp.values[0, :, class_idx], index=model["columns"])
+        contrib = contrib[contrib != 0]
+        contrib = contrib.reindex(contrib.abs().sort_values(ascending=False).index).head(8)
+        colors = ["#d62728" if v > 0 else "#1f77b4" for v in contrib.values]
+        fig2 = go.Figure(go.Bar(x=contrib.values, y=contrib.index, orientation="h", marker_color=colors))
+        fig2.update_layout(yaxis=dict(autorange="reversed"), xaxis_title=f"SHAP value (impact on predicting '{pred}')")
+        st.plotly_chart(fig2, width='stretch')
+        st.caption("Red = pushes this specific prediction toward the predicted segment. Blue = pushes away from it.")
+
     st.divider()
     st.subheader("What the model relies on most")
     imp = model["importances"].head(10).sort_values()
     fig = px.bar(x=imp.values, y=imp.index, orientation="h", labels={"x": "Importance", "y": "Feature"})
     st.plotly_chart(fig, width='stretch')
 
-# ---- Tab: Growth Forecast ---------------------------------------------------
+# ---- Tab: Model Comparison ---------------------------------------------------
 with tabs[7]:
+    st.subheader("Is the Random Forest actually worth it?")
+    st.caption(
+        "A single train/test split can get lucky. Both models below are scored with the same "
+        "5-fold stratified cross-validation, so this is an apples-to-apples comparison, not a cherry-picked split."
+    )
+    cv_summary = pd.DataFrame({
+        "Model": ["Logistic Regression", "Random Forest"],
+        "CV mean accuracy": [model["log_reg_cv"].mean(), model["rf_cv"].mean()],
+        "CV std": [model["log_reg_cv"].std(), model["rf_cv"].std()],
+    })
+    fig = go.Figure(go.Bar(
+        x=cv_summary["Model"], y=cv_summary["CV mean accuracy"],
+        error_y=dict(type="data", array=cv_summary["CV std"]),
+        marker_color=["#c7c7c7", "#1f77b4"],
+    ))
+    fig.add_hline(y=model["baseline_acc"], line_dash="dash", line_color="red",
+                  annotation_text=f"Majority baseline ({model['baseline_acc']:.2f})")
+    fig.update_layout(yaxis_title="5-fold CV accuracy")
+    st.plotly_chart(fig, width='stretch')
+
+    c1, c2 = st.columns(2)
+    c1.metric("Logistic Regression (CV)", f"{model['log_reg_cv'].mean():.1%}", f"± {model['log_reg_cv'].std():.1%}")
+    c2.metric("Random Forest (CV)", f"{model['rf_cv'].mean():.1%}", f"± {model['rf_cv'].std():.1%}")
+
+    if model["rf_cv"].mean() > model["log_reg_cv"].mean() + 0.01:
+        st.success("Random Forest's added complexity is justified — it meaningfully beats the linear baseline under cross-validation.")
+    else:
+        st.warning("Random Forest does not clearly beat Logistic Regression under cross-validation — the simpler, more interpretable model is a defensible choice.")
+
+    st.divider()
+    st.subheader("Held-out test set: per-segment performance")
+    report_df = pd.DataFrame(model["report"]).T.drop(index=["accuracy"], errors="ignore")
+    st.dataframe(report_df.round(3), width='stretch')
+    st.caption(
+        "\"Family/Teens\" has the lowest precision/recall of the four segments — this is the segment flagged "
+        "for human review rather than fully automated tagging."
+    )
+
+# ---- Tab: Growth Forecast ---------------------------------------------------
+with tabs[8]:
     st.subheader("Catalog growth forecast")
     yearly_total = df.dropna(subset=["year_added"]).groupby("year_added").size().reset_index(name="count")
     yearly_total = yearly_total[(yearly_total["year_added"] >= 2015) & (yearly_total["year_added"] <= 2020)].sort_values("year_added")
@@ -363,6 +434,40 @@ with tabs[7]:
     st.caption(
         "2020 actually fell short of the naive linear extrapolation — plausibly a COVID-19 production slowdown. "
         "Treat the forecast as a directional range, not a precise number."
+    )
+
+# ---- Tab: Data Explorer ---------------------------------------------------
+with tabs[9]:
+    st.subheader("Browse the raw catalog")
+    search = st.text_input("Search by title")
+    f1, f2, f3 = st.columns(3)
+    with f1:
+        cat_filter = st.multiselect("Category", sorted(df["Category"].dropna().unique().tolist()))
+    with f2:
+        country_filter = st.multiselect("Primary country", country_counts_full.head(30).index.tolist())
+    with f3:
+        year_range = st.slider(
+            "Year added", int(df["year_added"].min()), int(df["year_added"].max()),
+            (2015, 2020),
+        )
+
+    filtered = df.copy()
+    if search:
+        filtered = filtered[filtered["Title"].str.contains(search, case=False, na=False)]
+    if cat_filter:
+        filtered = filtered[filtered["Category"].isin(cat_filter)]
+    if country_filter:
+        filtered = filtered[filtered["primary_country"].isin(country_filter)]
+    filtered = filtered[filtered["year_added"].between(*year_range) | filtered["year_added"].isna()]
+
+    display_cols = ["Title", "Category", "primary_country", "Release_Date", "Rating", "Duration", "Type", "Description"]
+    st.write(f"{len(filtered):,} titles match")
+    st.dataframe(filtered[display_cols], width='stretch', height=400)
+    st.download_button(
+        "Download filtered results as CSV",
+        filtered[display_cols].to_csv(index=False).encode("utf-8"),
+        file_name="netflix_filtered.csv",
+        mime="text/csv",
     )
 
 st.divider()

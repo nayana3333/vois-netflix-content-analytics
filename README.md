@@ -3,6 +3,7 @@
 ![Python](https://img.shields.io/badge/Python-3.10%2B-blue)
 ![License: MIT](https://img.shields.io/badge/License-MIT-green)
 ![Status](https://img.shields.io/badge/Status-Complete-brightgreen)
+[![Verify](https://github.com/nayana3333/vois-netflix-content-analytics/actions/workflows/verify.yml/badge.svg)](https://github.com/nayana3333/vois-netflix-content-analytics/actions/workflows/verify.yml)
 
 A decision-science analysis of Netflix's catalog (7,789 titles, 2008–2021), built around four testable business hypotheses rather than open-ended exploration. Every claim in this project is backed by a statistical test, a held-out validation, or a baseline comparison — not a chart that merely "looks like" a trend.
 
@@ -30,7 +31,7 @@ Every catalog dollar Netflix spends acquiring or producing a title is a resource
 | **H1** — TV-share trend is real, not noise | Linear regression, TV-Show share of yearly additions vs. year | **Not supported** — p = 0.924 |
 | **H2** — Top genres show significant growth trends | Per-genre linear regression, 2015–2020 | **Supported** — 7 of 8 top genres significant (p < 0.05) |
 | **H3** — Country sourcing is concentrated | Herfindahl-Hirschman Index (HHI) on primary country | **Supported** — HHI = 1,677 (US alone = 37% of catalog) |
-| **H4** — Metadata predicts audience segment above baseline | Random Forest vs. majority-class baseline, held-out test set | **Supported** — 60% accuracy vs. 46% baseline (+14 pts) |
+| **H4** — Metadata predicts audience segment above baseline | Random Forest vs. majority-class baseline, held-out test set + 5-fold cross-validation | **Supported** — 60% accuracy vs. 46% baseline (+14 pts); 58.8% ± 1.1% under 5-fold CV, vs. 55.2% ± 0.6% for a Logistic Regression baseline |
 
 ## Results at a Glance
 
@@ -50,6 +51,10 @@ Every catalog dollar Netflix spends acquiring or producing a title is a resource
 |---|
 | ![Growth forecast](images/07_catalog_growth_forecast.png) |
 
+| Model Comparison (5-fold CV) | SHAP Explainability (per-feature impact) |
+|---|---|
+| ![Model comparison](images/08_model_comparison.png) | ![SHAP summary](images/09_shap_summary.png) |
+
 ## Methodology Notes
 
 - **Duration is split by type before comparison** — the raw `Duration` field mixes minutes (movies) and seasons (TV shows) in one text column; treating them as one numeric scale would make cross-category comparisons meaningless.
@@ -57,13 +62,15 @@ Every catalog dollar Netflix spends acquiring or producing a title is a resource
 - **Clustering uses a justified k.** K-Means is run for k=2..6 and the silhouette score picks k=3 (score 0.433), rather than assuming 3 clusters upfront. The resulting cohorts are named in business terms: *TV Series*, *International Co-Productions*, *Standard Single-Market Movies*.
 - **The forecast is validated on a genuine holdout**, not training-set fit. The last 2 years (2019–2020) are held out and never seen during fitting; the reported 21% MAPE is the honest, unseen-data error — a linear trend over-forecasts 2020, plausibly reflecting COVID-era production slowdowns.
 - **The classifier's accuracy is reported against a baseline**, not in isolation — 60% only means something next to the 46% you'd get by always guessing the majority class ("Adults").
+- **A single train/test split isn't trusted on its own.** The classifier is re-validated with 5-fold stratified cross-validation (58.8% ± 1.1%) and compared against a Logistic Regression baseline (55.2% ± 0.6%) — the Random Forest's added complexity is only kept because it measurably earns it.
+- **Feature importance isn't taken as explanation.** `feature_importances_` says which features matter on average across the forest; SHAP values decompose *individual* predictions into per-feature contributions, which is also what powers the live per-title explanation in the dashboard.
 
 ## Key Findings
 
 1. **Content mix**: TV-Show share moved from ~27% (2015) to ~35% (2020), but the year-to-year trend is statistically indistinguishable from noise (p = 0.924) — don't over-commit production budget to a TV-Show pivot on this evidence alone.
 2. **Genre growth**: International Movies, Dramas, and Comedies show statistically significant upward trends — the defensible genres for continued investment.
 3. **Sourcing risk**: HHI of 1,677 (moderately concentrated) with 37% US dependency and 66.5% from the top 5 countries — a real diversification consideration.
-4. **Audience-segment tagging**: A Random Forest classifier can auto-tag new titles by target audience at 60% accuracy (vs. 46% baseline), viable as first-pass triage with human review on the weaker "Family/Teens" segment.
+4. **Audience-segment tagging**: A Random Forest classifier can auto-tag new titles by target audience at 60% accuracy (vs. 46% baseline; 58.8% under cross-validation, beating a 55.2% Logistic Regression baseline), viable as first-pass triage with human review on the weaker "Family/Teens" segment. SHAP analysis shows genre tags ("Children & Family Movies", "Kids' TV", "Crime TV Shows") drive individual predictions more than duration or year.
 5. **Forecasting discipline**: Present catalog-growth forecasts as a range (±21% MAPE), not a single confident number.
 
 ## Repository Structure
@@ -94,6 +101,8 @@ jupyter notebook notebooks/Netflix_Analysis.ipynb
 
 The notebook reads `../data/Netflix_Dataset.csv` and reproduces every number and chart in this README from scratch — no hidden state, no hardcoded results.
 
+A [GitHub Actions workflow](.github/workflows/verify.yml) re-runs this exact process — fresh dependency install, full notebook re-execution, zero-error check — on every push, so the "Verify" badge above is a live, continuously-checked claim, not a one-time assertion.
+
 ### Running the Dashboard Locally
 
 ```bash
@@ -103,7 +112,9 @@ streamlit run app.py
 Opens at `http://localhost:8501`. The dashboard shares the exact same feature engineering and hypothesis tests as the notebook (same `data/Netflix_Dataset.csv`), plus:
 - Live filters on genres and countries
 - An interactive K-Means explorer (pick k, pick axes, watch clusters and silhouette score update)
-- A **"Predict a Title"** tab — enter hypothetical metadata and get a live prediction + probability breakdown from the trained Random Forest classifier
+- A **"Predict a Title"** tab — enter hypothetical metadata and get a live prediction, probability breakdown, and a **per-prediction SHAP explanation** (which features pushed *this specific* title toward its predicted segment) from the trained Random Forest classifier
+- A **"Model Comparison"** tab — Random Forest vs. Logistic Regression under 5-fold cross-validation, plus the full per-segment classification report
+- A **"Data Explorer"** tab — search/filter the raw 7,789-title catalog by title, category, country, and year, with CSV export
 - An adjustable-horizon growth forecast
 
 ### Deploying the Dashboard
@@ -126,6 +137,8 @@ This repo is ready to deploy for free on [Streamlit Community Cloud](https://str
 | 9 | Audience segment × category association (chi-square) |
 | 10 | Content clustering (K-Means, silhouette-selected k) |
 | 11 | H4 — audience-segment classifier (Random Forest) |
+| 11.1 | Model rigor — 5-fold cross-validation vs. Logistic Regression baseline |
+| 11.2 | Explainability — SHAP per-prediction feature contributions |
 | 12 | Growth forecast with holdout validation (MAPE) |
 | 13 | Hypothesis test summary table |
 | 14 | Quantified strategic recommendations |
@@ -135,7 +148,8 @@ This repo is ready to deploy for free on [Streamlit Community Cloud](https://str
 
 - **Statistical inference**: linear regression trend testing, chi-square test of independence, significance thresholds (not chart-reading)
 - **Unsupervised learning**: K-Means clustering with silhouette-based model selection
-- **Supervised learning**: Random Forest classification, evaluated against an explicit baseline (not in isolation)
+- **Supervised learning**: Random Forest classification, evaluated against an explicit baseline (not in isolation), validated with 5-fold stratified cross-validation and benchmarked against Logistic Regression
+- **Model explainability**: SHAP (SHapley Additive exPlanations) values for per-prediction, per-feature attribution, beyond aggregate feature importance
 - **Time-series validation**: forecast honesty via genuine held-out years and MAPE, not training-fit error
 - **Feature engineering**: parsing mixed-unit fields, multi-label genre/country handling, business-rule-based audience segmentation
 - **Business translation**: every statistical result mapped to a specific, quantified recommendation
