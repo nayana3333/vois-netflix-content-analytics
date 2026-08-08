@@ -255,7 +255,7 @@ with tabs[3]:
     top_n_df = country_counts_full.head(top_n)
     fig = px.bar(
         x=top_n_df.values, y=top_n_df.index, orientation="h",
-        labels={"x": "Titles", "y": "Primary country"}, color=top_n_df.values, color_continuous_scale="magma",
+        labels={"x": "Titles", "y": "Primary country"}, color=top_n_df.values, color_continuous_scale="magma_r",
     )
     fig.update_layout(yaxis=dict(autorange="reversed"), coloraxis_showscale=False)
     st.plotly_chart(fig, width='stretch')
